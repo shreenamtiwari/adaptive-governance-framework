@@ -1,59 +1,46 @@
 # ============================================================================
 # JupyterLab + PySpark Kernel
 # ============================================================================
-# Custom image that bundles JupyterLab with a PySpark kernel pre-configured
-# to connect to the Spark Master running in the Docker Compose stack.
+# Custom image that extends the official Jupyter PySpark notebook with
+# project-specific dependencies. Configured for development with
+# authentication disabled.
+#
+# Build:  docker build -f Dockerfile.jupyter -t governance-jupyter .
+# Run:    docker run -p 8888:8888 governance-jupyter
 # ============================================================================
 
-FROM bitnami/spark:3.5.0
+FROM jupyter/pyspark-notebook:latest
 
+# ---------- Switch to root for system package installation ----------------
 USER root
 
 # ---------- System dependencies -------------------------------------------
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        curl \
         gcc \
-        python3-dev && \
+        g++ && \
     rm -rf /var/lib/apt/lists/*
 
-# ---------- Python packages -----------------------------------------------
+# ---------- Python dependencies from requirements.txt ---------------------
+COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-        jupyterlab==4.0.* \
-        notebook \
-        ipykernel \
-        pyspark==3.5.0 \
-        delta-spark==3.0.0 \
-        pandas \
-        pyarrow \
-        matplotlib \
-        seaborn \
-        scikit-learn \
-        python-dotenv \
-        pyyaml \
-        great-expectations
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    rm /tmp/requirements.txt
 
-# ---------- PySpark kernel for Jupyter ------------------------------------
-RUN python3 -m ipykernel install --name pyspark --display-name "PySpark 3.5"
-
-# ---------- Spark defaults ------------------------------------------------
-ENV SPARK_HOME=/opt/bitnami/spark
-ENV PYSPARK_PYTHON=python3
-ENV PYSPARK_DRIVER_PYTHON=python3
-ENV PATH="${SPARK_HOME}/bin:${PATH}"
+# ---------- Switch back to the default notebook user ----------------------
+USER ${NB_UID}
 
 # ---------- Working directory ---------------------------------------------
-WORKDIR /opt/framework/notebooks
+WORKDIR /home/jovyan
 
 # ---------- Expose JupyterLab port ----------------------------------------
 EXPOSE 8888
 
-# ---------- Entrypoint ----------------------------------------------------
-CMD ["jupyter", "lab", \
+# ---------- Start notebook server (no authentication for dev) -------------
+CMD ["jupyter", "notebook", \
      "--ip=0.0.0.0", \
      "--port=8888", \
      "--no-browser", \
-     "--allow-root", \
-     "--NotebookApp.token=governance", \
-     "--notebook-dir=/opt/framework/notebooks"]
+     "--NotebookApp.token=''", \
+     "--NotebookApp.password=''", \
+     "--notebook-dir=/home/jovyan"]
