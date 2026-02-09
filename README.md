@@ -439,4 +439,5 @@ Customer deduplication:
 
 ## License
 
-This project is part of a dissertation and is licensed under the MIT License.
+© 2026 Kartikay Raniwala & Shreenam Tiwari. All rights reserved.
+This project is submitted as part of a dissertation and may not be reproduced without permission.
