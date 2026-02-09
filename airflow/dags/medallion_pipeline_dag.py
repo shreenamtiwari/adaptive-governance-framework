@@ -195,12 +195,16 @@ def _bronze_to_silver(**context):
         quarantine_path=f"{DATA_ROOT}/quarantine",
     )
 
-    # Orders — PII in delivery_instructions
+    # Pipeline run ID for lineage tracking
+    _run_id = context.get("run_id", "unknown")
+
+    # Orders — PII in delivery_instructions (per-column strategy: redact + hash + tokenize)
     print("[bronze_to_silver] Processing orders ...")
     transformer.transform_orders(
         table_name="orders",
         pii_columns=["delivery_instructions", "customer_review"],
         masking_strategy="redact",
+        pipeline_run_id=_run_id,
     )
     # Count quarantined records
     try:
@@ -214,23 +218,23 @@ def _bronze_to_silver(**context):
     except Exception:
         print("[bronze_to_silver] ✓ orders done")
 
-    # Customers — mask direct PII columns
+    # Customers — hash direct PII columns (SHA-256 for joinability)
     print("[bronze_to_silver] Processing customers ...")
     cust_bronze = spark.read.format("delta").load(f"{DATA_ROOT}/bronze/customers")
     cust_masked = transformer.mask_pii_columns(
         cust_bronze, ["aadhaar", "pan_card", "email", "phone"], strategy="hash"
     )
-    cust_masked = transformer.add_silver_metadata(cust_masked)
+    cust_masked = transformer.add_silver_metadata(cust_masked, pipeline_run_id=_run_id)
     transformer.write_to_silver(cust_masked, "customers")
     print(f"[bronze_to_silver] ✓ customers → Silver: {cust_masked.count():,}")
 
-    # Reviews — PII in review_text
+    # Reviews — redact PII in review_text
     print("[bronze_to_silver] Processing reviews ...")
     rev_bronze = spark.read.format("delta").load(f"{DATA_ROOT}/bronze/reviews")
     rev_masked = transformer.mask_pii_columns(
         rev_bronze, ["review_text"], strategy="redact"
     )
-    rev_masked = transformer.add_silver_metadata(rev_masked)
+    rev_masked = transformer.add_silver_metadata(rev_masked, pipeline_run_id=_run_id)
     transformer.write_to_silver(rev_masked, "reviews")
     print(f"[bronze_to_silver] ✓ reviews → Silver: {rev_masked.count():,}")
 
@@ -505,11 +509,28 @@ def _pii_scan_summary(**context):
     spark = get_spark_session(app_name="PII-Scan")
 
     # --- NER-enabled detector (DistilBERT + regex) ---
+    # Check if conservative masking mode should be activated (PII drift > 5%)
+    pii_tuner = AdaptivePIITuner(
+        feedback_dir=f"{DATA_ROOT}/metrics/pii_feedback",
+    )
+    _conservative = pii_tuner.should_use_conservative_mode()
+    _adaptive_thresh = pii_tuner.get_thresholds()
+
     try:
-        detector = PIIDetector(use_ner_model=True)
+        detector = PIIDetector(
+            use_ner_model=True,
+            adaptive_thresholds=_adaptive_thresh,
+            conservative_mode=_conservative,
+        )
         ner_status = "ENABLED (dslim/bert-base-NER)"
+        if _conservative:
+            ner_status += " [CONSERVATIVE MODE — drift detected]"
     except Exception:
-        detector = PIIDetector(use_ner_model=False)
+        detector = PIIDetector(
+            use_ner_model=False,
+            adaptive_thresholds=_adaptive_thresh,
+            conservative_mode=_conservative,
+        )
         ner_status = "DISABLED (fallback to regex-only)"
 
     print("=" * 70)
@@ -522,10 +543,7 @@ def _pii_scan_summary(**context):
         "reviews": ["review_text"],
     }
 
-    # --- PII Tuner for adaptive thresholds ---
-    pii_tuner = AdaptivePIITuner(
-        feedback_dir=f"{DATA_ROOT}/metrics/pii_feedback",
-    )
+    # --- PII Tuner already initialised above (adaptive thresholds) ---
 
     total_pii = 0
     feedback_events = []

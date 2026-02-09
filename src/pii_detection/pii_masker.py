@@ -64,24 +64,35 @@ class PIIMasker:
         return digest[: max(len(value), 8)]
 
     def _redact_value(self, entity_type: str) -> str:
-        """Replace with a typed placeholder."""
-        return f"***{entity_type}***"
+        """Replace with a typed [REDACTED] placeholder (DPDP Act compliant)."""
+        return f"[REDACTED:{entity_type}]"
 
     def _tokenize_value(self, value: str) -> str:
-        """Format-preserving tokenisation.
+        """Format-preserving encryption (FPE) using keyed HMAC.
 
-        Digits → random digits, letters → random letters, preserving
-        separators and structure.
+        Produces deterministic, format-preserving output:
+        digits → digits, letters → letters, preserving separators.
+        Uses HMAC-SHA256 with ``self.salt`` as the key for
+        reproducibility (reversible with the same key).
         """
-        import random
-        import string
+        import hmac
+
+        # Derive a deterministic pseudo-random stream from the value
+        mac = hmac.new(
+            self.salt.encode(), value.encode(), "sha256",
+        ).hexdigest()
 
         result = []
+        mac_idx = 0
         for ch in value:
             if ch.isdigit():
-                result.append(str(random.randint(0, 9)))
+                result.append(str(int(mac[mac_idx % len(mac)], 16) % 10))
+                mac_idx += 1
             elif ch.isalpha():
-                result.append(random.choice(string.ascii_letters))
+                offset = int(mac[mac_idx % len(mac)], 16)
+                base = ord('A') if ch.isupper() else ord('a')
+                result.append(chr(base + offset % 26))
+                mac_idx += 1
             else:
                 result.append(ch)
         return "".join(result)

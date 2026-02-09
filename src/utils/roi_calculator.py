@@ -132,6 +132,45 @@ class GovernanceROICalculator:
             "additional_conversions": additional,
         }
 
+    def calculate_clv_impact(
+        self,
+        avg_purchase_frequency: float = 4.0,
+        avg_customer_lifespan_years: float = 3.0,
+        retention_improvement_pct: float = 0.05,
+    ) -> Dict[str, float]:
+        """Revenue impact from improved CLV via better data quality.
+
+        Better data governance → fewer wrong deliveries → higher
+        retention → increased Customer Lifetime Value.
+
+        Parameters
+        ----------
+        avg_purchase_frequency : float
+            Average purchases per customer per year.
+        avg_customer_lifespan_years : float
+            Average active lifespan of a customer.
+        retention_improvement_pct : float
+            Expected retention improvement from governance (default 5 %).
+        """
+        clv_before = (
+            self.avg_order_value * avg_purchase_frequency
+            * avg_customer_lifespan_years
+        )
+        clv_after = (
+            self.avg_order_value * avg_purchase_frequency
+            * (avg_customer_lifespan_years * (1 + retention_improvement_pct))
+        )
+        clv_uplift_per_customer = clv_after - clv_before
+        total_clv_uplift = clv_uplift_per_customer * self.customer_base
+
+        return {
+            "clv_before": clv_before,
+            "clv_after": clv_after,
+            "clv_uplift_per_customer": clv_uplift_per_customer,
+            "total_clv_uplift": total_clv_uplift,
+            "annual_clv_impact": total_clv_uplift / avg_customer_lifespan_years,
+        }
+
     def calculate_compliance_cost_avoidance(self) -> Dict[str, float]:
         """Estimated cost avoidance from DPDP Act 2023 compliance."""
         # Conservative: 1 % probability of ₹10 Cr penalty
@@ -264,6 +303,7 @@ class GovernanceROICalculator:
         pers = self.calculate_personalization_uplift()
         comp = self.calculate_compliance_cost_avoidance()
         ops = self.calculate_operational_efficiency()
+        clv = self.calculate_clv_impact()
 
         implementation_cost = 50_00_000   # ₹50 lakhs (one-time)
         annual_maintenance = 10_00_000    # ₹10 lakhs/year
@@ -273,6 +313,7 @@ class GovernanceROICalculator:
             + pers["annual_uplift"]
             + comp["total_compliance_value"]
             + ops["annual_savings"]
+            + clv["annual_clv_impact"]
         )
 
         # Add per-dimension DQ savings if available
@@ -289,12 +330,14 @@ class GovernanceROICalculator:
             "Metric": [
                 "RTO Cost Savings (Annual)",
                 "Personalisation Revenue Uplift (Annual)",
+                "CLV Uplift Impact (Annual)",
                 "Compliance Cost Avoidance (Annual)",
                 "Operational Efficiency Savings (Annual)",
             ],
             "Value (₹)": [
                 f"₹{rto['annual_savings']:,.0f}",
                 f"₹{pers['annual_uplift']:,.0f}",
+                f"₹{clv['annual_clv_impact']:,.0f}",
                 f"₹{comp['total_compliance_value']:,.0f}",
                 f"₹{ops['annual_savings']:,.0f}",
             ],

@@ -264,8 +264,42 @@ class AdaptivePIITuner:
         path = self.feedback_dir / "tuned_thresholds.json"
         if path.exists():
             with open(path) as f:
-                return json.load(f)
+                data = json.load(f)
+                # Handle both flat dict and nested {"thresholds": {...}} format
+                return data.get("thresholds", data) if isinstance(data, dict) else {}
         return {}
+
+    def get_optimal_threshold(self, entity_type: str) -> float:
+        """Return the optimal confidence threshold for a specific entity type.
+
+        Falls back to ``self.default_threshold`` if no tuned threshold
+        exists for the requested entity type.
+
+        Parameters
+        ----------
+        entity_type : str
+            PII entity type (e.g. ``"PERSON"``, ``"EMAIL"``).
+
+        Returns
+        -------
+        float
+        """
+        thresholds = self.get_thresholds()
+        return thresholds.get(entity_type, self.default_threshold)
+
+    def should_use_conservative_mode(self) -> bool:
+        """Check if conservative masking mode should be activated.
+
+        Conservative mode lowers all thresholds by 20 %% when PII drift
+        is detected (FN rate delta > 5 %%).  This prevents data leaks
+        until the model is re-tuned.
+
+        Returns
+        -------
+        bool
+        """
+        drift_report = self.detect_pii_drift()
+        return drift_report.get("has_drift", False)
 
     # ------------------------------------------------------------------
     # PII-type drift detection
@@ -310,7 +344,7 @@ class AdaptivePIITuner:
         drifted = []
         for et, recent_fn in recent_rates.items():
             baseline_fn = baseline_rates.get(et, 0.0)
-            if recent_fn - baseline_fn > 0.10:  # >10 pp increase in FN rate
+            if recent_fn - baseline_fn > 0.05:  # >5 pp increase in FN rate
                 drifted.append({
                     "entity_type": et,
                     "baseline_fn_rate": round(baseline_fn, 4),

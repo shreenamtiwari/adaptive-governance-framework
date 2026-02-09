@@ -82,10 +82,22 @@ class PIIDetector:
         confidence_threshold: float = 0.85,
         use_ner_model: bool = False,
         model_name: str = "dslim/bert-base-NER",
+        adaptive_thresholds: Optional[Dict[str, float]] = None,
+        conservative_mode: bool = False,
     ):
         self.confidence_threshold = confidence_threshold
         self.use_ner_model = use_ner_model
         self._ner_pipeline = None
+        # Per-entity-type thresholds from AdaptivePIITuner
+        self._adaptive_thresholds = adaptive_thresholds or {}
+        # Conservative mode: lower all thresholds by 20% when PII drift detected
+        self.conservative_mode = conservative_mode
+        if conservative_mode:
+            self.confidence_threshold = max(0.50, confidence_threshold * 0.80)
+            self._adaptive_thresholds = {
+                et: max(0.50, t * 0.80)
+                for et, t in self._adaptive_thresholds.items()
+            }
 
         if use_ner_model:
             self._load_ner_model(model_name)
@@ -156,10 +168,14 @@ class PIIDetector:
                 seen_spans = set()
                 for chunk_offset, chunk_text in chunks:
                     ner_results = self._ner_pipeline(chunk_text)
-                    for ent in ner_results:
-                        if (
+                for ent in ner_results:
+                    # Use adaptive per-entity threshold if available
+                    _ent_thresh = self._adaptive_thresholds.get(
+                        "PERSON", self.confidence_threshold,
+                    )
+                    if (
                             ent["entity_group"] == "PER"
-                            and ent["score"] >= self.confidence_threshold
+                            and ent["score"] >= _ent_thresh
                         ):
                             abs_start = chunk_offset + ent["start"]
                             abs_end = chunk_offset + ent["end"]
@@ -178,8 +194,13 @@ class PIIDetector:
             except Exception as exc:
                 logger.error("NER inference error: {}", exc)
 
-        # Filter by confidence threshold (mainly for NER)
-        entities = [e for e in entities if e.score >= self.confidence_threshold]
+        # Filter by per-entity adaptive threshold (falls back to default)
+        entities = [
+            e for e in entities
+            if e.score >= self._adaptive_thresholds.get(
+                e.entity_type, self.confidence_threshold,
+            )
+        ]
 
         return entities
 
@@ -222,6 +243,16 @@ class PIIDetector:
 
         _use_ner = use_ner  # capture in closure
 
+        # Load adaptive thresholds if available
+        _adaptive_thresh: Dict[str, float] = {}
+        try:
+            from src.pii_detection.adaptive_pii_tuner import AdaptivePIITuner
+            _adaptive_thresh = AdaptivePIITuner().get_thresholds()
+            if isinstance(_adaptive_thresh, dict) and "thresholds" in _adaptive_thresh:
+                _adaptive_thresh = _adaptive_thresh["thresholds"]
+        except Exception:
+            pass
+
         @udf(returnType=StringType())
         def _detect_pii_udf(text: str) -> str:
             if not text:
@@ -229,7 +260,9 @@ class PIIDetector:
             # Preprocess chat/ticket text — strip role prefixes
             cleaned = _preprocess_chat_text(text)
             detector = PIIDetector(
-                confidence_threshold=0.85, use_ner_model=_use_ner,
+                confidence_threshold=0.85,
+                use_ner_model=_use_ner,
+                adaptive_thresholds=_adaptive_thresh,
             )
             entities = detector.detect_pii(cleaned)
             return json.dumps(
