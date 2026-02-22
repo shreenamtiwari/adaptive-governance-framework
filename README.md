@@ -283,7 +283,7 @@ adaptive-governance-framework/
 ### 1. Clone
 
 ```bash
-git clone https://github.com/KartikayRaniwala/adaptive-governance-framework.git
+git clone https://github.com/shreenamtiwari/adaptive-governance-framework.git
 cd adaptive-governance-framework
 ```
 
